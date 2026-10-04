@@ -1,0 +1,17 @@
+{
+  "name": "minimax-code-openai-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Loopback-only text Chat Completions bridge for the official MiniMax Code CLI, with mandatory macOS sandbox checks.",
+  "engines": { "node": ">=22.19.0 <23" },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "setup": "node scripts/manage.mjs setup",
+    "doctor": "node scripts/manage.mjs doctor",
+    "login": "node scripts/manage.mjs login",
+    "verify": "node scripts/manage.mjs verify",
+    "key": "node scripts/manage.mjs key",
+    "test": "node --test test/*.test.mjs"
+  }
+}

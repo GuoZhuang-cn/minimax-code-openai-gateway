@@ -1,0 +1,12 @@
+node_modules/
+.runtime/
+.state/
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+.DS_Store
+coverage/
+outputs/
+.workbuddy/
