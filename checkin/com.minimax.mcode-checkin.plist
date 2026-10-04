@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.minimax.mcode-checkin</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/guozhuang/bin/mcode-checkin.zsh</string>
+  </array>
+
+  <!-- 每天早上 09:05 执行（每日奖励按天重置，早上跑最稳） -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>5</integer>
+  </dict>
+
+  <!-- 错过了（关机/睡眠）开机后补跑一次 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/guozhuang/.mcode-checkin/launchd-out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/guozhuang/.mcode-checkin/launchd-err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TERM</key><string>xterm-256color</string>
+    <key>PATH</key><string>/Users/guozhuang/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>
