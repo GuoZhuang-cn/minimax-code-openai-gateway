@@ -25,28 +25,32 @@ async function assertKey() {
   if (key.length < 32 || /[^\x21-\x7e]/.test(key)) throw new Error('invalid_gateway_key');
   if (!timingSafeEqual(digest(key), digest(key))) throw new Error('key_integrity_check_failed');
 }
+const usableSandbox = value => value === 'verified' || value === 'unsandboxed_opt_in';
 async function setup() {
   const worker = await createWorker();
   const created = await generateKey();
   await assertKey();
   const result = await worker.preflight();
   console.log(JSON.stringify({ action: 'setup', cliVersion: CLI_VERSION, key: created ? 'created_in_.state/gateway.key' : 'already_present', readiness: result }));
-  process.exitCode = result.sandbox === 'verified' ? 0 : 2;
+  process.exitCode = usableSandbox(result.sandbox) ? 0 : 2;
 }
 async function doctor() {
   await assertKey();
   const worker = await createWorker();
   const result = await worker.preflight();
   console.log(JSON.stringify({ action: 'doctor', cliVersion: CLI_VERSION, readiness: result }));
-  process.exitCode = result.sandbox === 'verified' ? 0 : 2;
+  process.exitCode = usableSandbox(result.sandbox) ? 0 : 2;
 }
 async function login() {
   await assertKey();
   const worker = await createWorker();
   const result = await worker.preflight();
-  if (result.sandbox !== 'verified') throw new Error('sandbox_preflight_failed');
+  if (!usableSandbox(result.sandbox)) throw new Error('sandbox_preflight_failed');
   // Authentication is intentionally manual and isolated from the gateway worker.
   const launcher = path.join(ROOT, '.runtime', 'minimax-code', 'bin', 'mcode');
+  if (result.sandbox === 'unsandboxed_opt_in') {
+    console.log('WARNING: running without OS sandbox (GATEWAY_ALLOW_UNSANDBOXED=1). The CLI keeps its normal local file/tool access; isolation relies on the separate HOME, data dir and empty workspace only.');
+  }
   console.log('Run this in your own terminal, complete the official browser sign-in, then run: npm run verify');
   console.log(`HOME=${JSON.stringify(worker.env.HOME)} MINIMAX_DATA_DIR=${JSON.stringify(worker.env.MINIMAX_DATA_DIR)} MAVIS_DATA_DIR=${JSON.stringify(worker.env.MAVIS_DATA_DIR)} MCODE_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1 ${JSON.stringify(launcher)} login`);
   console.log('This tool never accepts, reads, or prints MiniMax credentials.');
@@ -55,7 +59,7 @@ async function verify() {
   await assertKey();
   const worker = await createWorker();
   const result = await worker.preflight();
-  if (result.sandbox !== 'verified') throw new Error('sandbox_preflight_failed');
+  if (!usableSandbox(result.sandbox)) throw new Error('sandbox_preflight_failed');
   const verified = await worker.verify();
   console.log(JSON.stringify({ action: 'verify', readiness: verified }));
 }

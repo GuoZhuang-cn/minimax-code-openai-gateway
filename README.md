@@ -19,9 +19,29 @@
 - 除健康检查外全部要求长度至少 32 位的 Bearer API Key；密钥只保存在被 Git 忽略的 `.state/gateway.key`（仅当前用户可读）。
 - 请求体上限 128 KiB、单请求并发、运行超时、无模型正文和密钥日志。
 - CLI 以独立 HOME、数据目录和空工作区启动；不继承用户 HOME、代理变量、`NODE_OPTIONS` 或现有令牌。
-- 在 macOS 上，启动前必须通过系统 `sandbox-exec` canary：验证 worker 无法读取/写入网关状态区外文件、只能写入其空工作区、不能执行 shell。验证失败时网关保持不可用，绝不裸跑 CLI。
+- 在 macOS 上，启动前必须通过系统 `sandbox-exec` 检查：先确认系统能够施加限制性 Seatbelt profile，再运行 canary 验证 worker 无法读取/写入网关状态区外文件、只能写入其空工作区、不能执行 shell。任一环节不通过，网关保持不可用，绝不静默裸跑 CLI。
 
 > macOS 系统级沙箱的实际行为会随版本和安全策略变化。`npm run setup` / `npm run doctor` 的预检是启用前提；未通过预检或未完成认证模型验证，`/healthz` 会显示不可用，聊天请求返回 503。
+
+### 沙箱状态取值
+
+`readiness.sandbox` 只会是以下之一，含义严格区分：
+
+| 取值 | 含义 | 网关是否启用 |
+| --- | --- | --- |
+| `verified` | 系统成功施加限制性沙箱，且 canary 全部通过（读/写外部文件被拒、内部可读写、spawn shell 被拒） | 启用 |
+| `verification_failed` | 沙箱施加成功但隔离检查失败，或 CLI 自校验失败 | 保持禁用 |
+| `unavailable` | 系统拒绝施加任何限制性 profile（典型：网关进程本身运行在另一个沙箱内，macOS 不允许嵌套叠加，`sandbox_apply` 返回 `Operation not permitted`；也见于未来 OS 策略变更） | 保持禁用 |
+| `unsandboxed_opt_in` | 同上，但用户显式设置了 `GATEWAY_ALLOW_UNSANDBOXED=1` 主动降级 | 启用（隔离仅剩独立 HOME/数据目录/空工作区） |
+| `unsupported_platform` | 非 macOS | 保持禁用 |
+
+在普通终端（不在其它沙箱内）运行本网关时，macOS 允许嵌套外的 `sandbox-exec`，`verified` 是正常结果。若在已处于沙箱的环境中运行（例如某些自动化宿主），得到 `unavailable` 属预期；此时要么回到普通终端运行，要么显式降级：
+
+```bash
+GATEWAY_ALLOW_UNSANDBOXED=1 npm run start
+```
+
+降级意味着 CLI 保留其对本地文件系统的正常读写与工具能力（它自己的 `--permission` 策略不变），隔离仅剩独立 HOME、独立数据目录与空工作区这三层。降级口令只通过本仓库文档口口相传，不写死默认值。
 
 ## 安装与启用
 
@@ -38,7 +58,7 @@ npm run doctor
 
 安装脚本只接受官方 npm registry，并会对其下载的依赖进行自身校验；安装完成后仍须以 `doctor` 的沙箱验证结果为准。
 
-如果 `doctor` 中 sandbox 为 `verified`，执行下列命令获取一次性认证命令，再在**你自己的终端**完成官方浏览器登录：
+如果 `doctor` 中 sandbox 为 `verified` 或 `unsandboxed_opt_in`，执行下列命令获取一次性认证命令，再在**你自己的终端**完成官方浏览器登录：
 
 ```bash
 npm run login

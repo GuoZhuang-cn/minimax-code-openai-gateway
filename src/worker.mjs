@@ -7,7 +7,12 @@ export const SANDBOX = '/usr/bin/sandbox-exec';
 export const ROOT = path.resolve(import.meta.dirname, '..');
 
 export async function privateDirectory(dir) {
-  try { await fs.mkdir(dir, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  try { await fs.mkdir(dir, { mode: 0o700 }); } catch (error) {
+    // Some managed runtimes wrap mkdir on an existing path with a non-standard
+    // error code; treat a genuine EEXIST by code or message as "already there".
+    const alreadyExists = error.code === 'EEXIST' || /^EEXIST\b/.test(String(error.message || ''));
+    if (!alreadyExists) throw error;
+  }
   const st = await fs.lstat(dir);
   if (!st.isDirectory() || st.isSymbolicLink() || (process.getuid && st.uid !== process.getuid()) || (st.mode & 0o077)) {
     throw new Error('unsafe_private_directory');
@@ -140,50 +145,78 @@ export async function createWorker(root = ROOT) {
   const env = workerEnv(p);
   const cwd = path.join(p.worker, 'workspace');
   const state = { ready: false, cli: 'not_checked', sandbox: 'not_checked', model: 'not_verified' };
-  const invoke = (args, opts = {}) => execCapture(SANDBOX, ['-p', profile, p.node, p.cli, ...args], { cwd, env, ...opts });
+  // GATEWAY_ALLOW_UNSANDBOXED=1 is a deliberate, explicit downgrade for runtimes where
+  // macOS refuses to apply a restrictive Seatbelt profile (for example when the gateway
+  // itself runs inside another sandbox: sandbox_apply then fails with EPERM). Without
+  // this opt-in the gateway stays disabled whenever isolation cannot be proven.
+  const allowUnsandboxed = process.env.GATEWAY_ALLOW_UNSANDBOXED === '1';
+  let invoke = null;
+  const usable = () => state.sandbox === 'verified' || state.sandbox === 'unsandboxed_opt_in';
+  const unsandboxedInvoke = (args, opts = {}) => execCapture(p.node, [p.cli, ...args], { cwd, env, ...opts });
+  const sandboxedInvoke = (args, opts = {}) => execCapture(SANDBOX, ['-p', profile, p.node, p.cli, ...args], { cwd, env, ...opts });
+  async function sandboxEnforceable() {
+    // A profile that only denies network egress must apply cleanly on a normal Mac.
+    // If the kernel refuses the profile itself (nested sandbox, new OS policy), no
+    // isolation can be guaranteed here and we must say so instead of claiming verified.
+    const probe = await execCapture(SANDBOX, ['-p', '(version 1)(deny network-outbound)', '/usr/bin/true'], { timeoutMs: 15000 });
+    return probe.code === 0 && probe.stderr.trim() === '';
+  }
   async function preflight() {
     state.ready = false; state.cli = 'not_checked'; state.sandbox = 'not_checked'; state.model = 'not_verified';
+    invoke = null;
     if (process.platform !== 'darwin') { state.sandbox = 'unsupported_platform'; return { ...state }; }
     try {
       const manifest = JSON.parse(await fs.readFile(path.join(p.cliRoot, 'package.json'), 'utf8'));
       if (manifest.name !== '@minimax-ai/code' || manifest.version !== CLI_VERSION) throw new Error();
       state.cli = `installed_${CLI_VERSION}`;
     } catch { state.cli = 'missing_or_version_mismatch'; return { ...state }; }
-    const sentinel = path.join(p.state, 'sandbox-canary');
-    try {
-      await fs.writeFile(sentinel, 'synthetic-isolation-canary', { mode: 0o600 });
-      const probe = `const f=require('node:fs');const cp=require('node:child_process');
+    let sandboxed;
+    try { sandboxed = await sandboxEnforceable(); } catch { sandboxed = false; }
+    if (!sandboxed) {
+      // The OS refused to apply a restrictive sandbox at all: this is never "verified".
+      if (!allowUnsandboxed) { state.sandbox = 'unavailable'; return { ...state }; }
+      invoke = unsandboxedInvoke;
+      state.sandbox = 'unsandboxed_opt_in';
+    } else {
+      const sentinel = path.join(p.state, 'sandbox-canary');
+      try {
+        await fs.writeFile(sentinel, 'synthetic-isolation-canary', { mode: 0o600 });
+        const probe = `const f=require('node:fs');const cp=require('node:child_process');
 const outside=${JSON.stringify(sentinel)};const inside=${JSON.stringify(path.join(cwd, 'probe'))};
 for(const operation of [()=>f.readFileSync(outside),()=>f.writeFileSync(outside,'bad')]){let denied=false;try{operation()}catch(e){denied=['EPERM','EACCES'].includes(e.code)}if(!denied)process.exit(9)}
 f.writeFileSync(inside,'ok');if(f.readFileSync(inside,'utf8')!=='ok')process.exit(10);
 const s=cp.spawnSync('/bin/sh',['-c','exit 0']);if(!s.error||s.error.code!=='EPERM')process.exit(11);console.log('isolation-ok');`;
-      const probeResult = await execCapture(SANDBOX, ['-p', profile, p.node, '-e', probe], { cwd, env, timeoutMs: 15000 });
-      if (probeResult.code !== 0 || probeResult.stdout.trim() !== 'isolation-ok') throw new Error();
+        const probeResult = await execCapture(SANDBOX, ['-p', profile, p.node, '-e', probe], { cwd, env, timeoutMs: 15000 });
+        if (probeResult.code !== 0 || probeResult.stdout.trim() !== 'isolation-ok') throw new Error();
+        invoke = sandboxedInvoke;
+      } catch { invoke = null; state.sandbox = 'verification_failed'; return { ...state }; }
+    }
+    try {
       const version = await invoke(['--version'], { timeoutMs: 20000 });
       if (version.code !== 0 || version.stdout.trim() !== CLI_VERSION) throw new Error();
       const help = await invoke(['exec', '--help'], { timeoutMs: 20000 });
       if (help.code !== 0 || !['--input', '--output-format', '--permission', '--max-steps', '--cwd'].every(flag => help.stdout.includes(flag))) throw new Error();
-      state.sandbox = 'verified'; state.cli = `verified_${CLI_VERSION}`;
-    } catch { state.sandbox = 'verification_failed'; return { ...state }; }
+      state.cli = `verified_${CLI_VERSION}`;
+    } catch { invoke = null; state.sandbox = 'verification_failed'; return { ...state }; }
     try {
       const receipt = JSON.parse(await fs.readFile(path.join(p.state, 'verified.json'), 'utf8'));
-      if (receipt.version === CLI_VERSION && receipt.node === p.node && receipt.schema === 1) {
+      if (receipt.version === CLI_VERSION && receipt.node === p.node && receipt.schema === 1 && receipt.sandbox === state.sandbox) {
         state.model = 'previously_verified'; state.ready = true;
       }
     } catch { /* Explicit authenticated smoke test has not completed. */ }
     return { ...state };
   }
   async function run({ messages, signal, verify = false }) {
-    if (state.sandbox !== 'verified' || (!verify && !state.ready)) throw new Error('worker_not_ready');
+    if (!usable() || (!verify && !state.ready)) throw new Error('worker_not_ready');
     const args = ['exec', '--input', '-', '--input-format', 'text', '--output-format', 'json', '--cwd', cwd, '--permission', 'smart', '--max-steps', '1', '--timeout', '110s'];
     const result = await invoke(args, { input: serializeMessages(messages), signal, timeoutMs: 115000 });
     return parseResult(result.stdout, result.code);
   }
   async function verify() {
-    if (state.sandbox !== 'verified') throw new Error('worker_not_ready');
+    if (!usable()) throw new Error('worker_not_ready');
     const response = await run({ messages: [{ role: 'user', content: 'Reply with exactly OK and nothing else.' }], verify: true });
     if (response.text.trim() !== 'OK') throw new Error('smoke_answer_mismatch');
-    await fs.writeFile(path.join(p.state, 'verified.json'), JSON.stringify({ schema: 1, version: CLI_VERSION, node: p.node }), { mode: 0o600 });
+    await fs.writeFile(path.join(p.state, 'verified.json'), JSON.stringify({ schema: 1, version: CLI_VERSION, node: p.node, sandbox: state.sandbox }), { mode: 0o600 });
     state.model = 'verified'; state.ready = true;
     return { ...state };
   }
