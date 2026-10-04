@@ -25,13 +25,18 @@
 
 ## 安装与启用
 
-安装所需的官方 MiniMax Code CLI 已放入项目的 `.runtime/`，不会修改 MiniMax Code 桌面应用或 shell PATH。
+当前本机已将官方 MiniMax Code CLI 隔离安装在项目的 `.runtime/`，不会修改 MiniMax Code 桌面应用或 shell PATH。`.runtime/` 不会提交到 GitHub；在新的克隆目录中，先下载官方安装脚本、检查其内容后，再安装到相同隔离位置：
 
 ```bash
-cd /Users/guozhuang/WorkBuddy/2026-10-04-07-44-35/minimax-code-openai-gateway
+cd /path/to/minimax-code-openai-gateway
+curl --fail --location --silent --show-error https://filecdn.minimax.chat/public/install.sh --output /tmp/minimax-code-install.sh
+shasum -a 256 /tmp/minimax-code-install.sh
+MCODE_INSTALL_DIR="$PWD/.runtime/minimax-code" MCODE_NO_MODIFY_PATH=1 bash /tmp/minimax-code-install.sh
 npm run setup
 npm run doctor
 ```
+
+安装脚本只接受官方 npm registry，并会对其下载的依赖进行自身校验；安装完成后仍须以 `doctor` 的沙箱验证结果为准。
 
 如果 `doctor` 中 sandbox 为 `verified`，执行下列命令获取一次性认证命令，再在**你自己的终端**完成官方浏览器登录：
 
