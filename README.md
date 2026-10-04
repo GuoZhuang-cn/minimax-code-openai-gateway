@@ -35,13 +35,13 @@
 | `unsandboxed_opt_in` | 同上，但用户显式设置了 `GATEWAY_ALLOW_UNSANDBOXED=1` 主动降级 | 启用（隔离仅剩独立 HOME/数据目录/空工作区） |
 | `unsupported_platform` | 非 macOS | 保持禁用 |
 
-在普通终端（不在其它沙箱内）运行本网关时，macOS 允许嵌套外的 `sandbox-exec`，`verified` 是正常结果。若在已处于沙箱的环境中运行（例如某些自动化宿主），得到 `unavailable` 属预期；此时要么回到普通终端运行，要么显式降级：
+在普通终端（不在其它沙箱内）运行本网关时，`sandbox-exec` 可正常施加限制性 profile，`verified` 是预期结果。若在已处于沙箱的环境中运行（例如某些自动化宿主），内核会拒绝嵌套施加，得到 `unavailable` 属预期；此时要么回到普通终端运行，要么显式降级：
 
 ```bash
 GATEWAY_ALLOW_UNSANDBOXED=1 npm run start
 ```
 
-降级意味着 CLI 保留其对本地文件系统的正常读写与工具能力（它自己的 `--permission` 策略不变），隔离仅剩独立 HOME、独立数据目录与空工作区这三层。降级口令只通过本仓库文档口口相传，不写死默认值。
+降级意味着 CLI 保留其对本地文件系统的正常读写与工具能力（它自己的 `--permission` 策略不变），隔离仅剩独立 HOME、独立数据目录与空工作区这三层。该开关不是默认值，必须由使用者显式设置。
 
 ## 安装与启用
 
